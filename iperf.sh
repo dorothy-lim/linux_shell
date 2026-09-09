@@ -11,8 +11,8 @@ REVERSE=false                # true면 -R (서버->클라이언트 방향 테스
 INTERVAL=1                   # 결과 출력 간격(초)
 
 CONNECT_TIMEOUT=""           # --connect-timeout (밀리초 단위), 값 없으면 미적용 (예: 1000)
-FORMAT=""                    # -f, --format  (k,m,g,t / K,M,G,T), 값 없으면 미적용 (예: m)
-OMIT=""                      # -O, --omit N  (시작 N초 통계 제외), 값 없으면 미적용 (예: 3)
+FORMAT="m"                   # -f, --format  (k,m,g,t / K,M,G,T), 값 없으면 미적용 (예: m)
+OMIT="5"                     # -O, --omit N  (시작 N초 통계 제외), 값 없으면 미적용 (예: 3)
 
 # ===== 스크립트 실행 인자 처리 =====
 # 사용법: ./iperf.sh [-R]   (-R 을 주면 REVERSE=true)
