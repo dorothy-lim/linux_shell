@@ -4,7 +4,7 @@
 SERVER_IP="192.168.1.145"   # 서버 IP 주소
 PORT=""                     # 값 없으면 -p 옵션 미적용 (기본 포트 5201 사용)
 DURATION=10                 # 테스트 시간(초)
-PARALLEL=10                 # 병렬 스트림 개수
+PARALLEL=10                # 병렬 스트림 개수
 PROTOCOL="tcp"               # tcp 또는 udp
 BANDWIDTH=""                 # UDP일 때 대역폭 제한 (예: 100M), 비워두면 미적용
 REVERSE=false                # true면 -R (서버->클라이언트 방향 테스트), 스크립트 실행 시 -R 옵션으로 켤 수 있음
@@ -13,15 +13,21 @@ INTERVAL=1                   # 결과 출력 간격(초)
 CONNECT_TIMEOUT=""           # --connect-timeout (밀리초 단위), 값 없으면 미적용 (예: 1000)
 FORMAT="m"                   # -f, --format  (k,m,g,t / K,M,G,T), 값 없으면 미적용 (예: m)
 OMIT="5"                     # -O, --omit N  (시작 N초 통계 제외), 값 없으면 미적용 (예: 3)
+OUTPUT_FILE=""                # -o 로 지정 가능, 값 없으면 기본 파일명 사용 (예: iperf_result_20260909_153000.log)
 
 # ===== 스크립트 실행 인자 처리 =====
-# 사용법: ./iperf.sh [-R]   (-R 을 주면 REVERSE=true)
-while getopts "R" opt; do
+# 사용법: ./iperf.sh [-R] [-o 저장파일명]   (-R 을 주면 REVERSE=true, -o 로 결과 저장 파일명 지정)
+while getopts "Ro:" opt; do
     case "$opt" in
         R) REVERSE=true ;;
-        *) echo "사용법: $0 [-R]" >&2; exit 1 ;;
+        o) OUTPUT_FILE="$OPTARG" ;;
+        *) echo "사용법: $0 [-R] [-o 저장파일명]" >&2; exit 1 ;;
     esac
 done
+
+if [ -z "$OUTPUT_FILE" ]; then
+    OUTPUT_FILE="iperf_result_$(date +%Y%m%d_%H%M%S).log"
+fi
 
 # ===== 옵션 조립 =====
 OPTS="-c ${SERVER_IP} -t ${DURATION} -P ${PARALLEL} -i ${INTERVAL}"
@@ -54,12 +60,13 @@ if [ -n "$OMIT" ]; then
 fi
 
 # ===== 실행 =====
-echo "실행 명령어: iperf3 ${OPTS}"
+echo "실행 명령어: iperf3 ${OPTS}" | tee "${OUTPUT_FILE}"
+echo "결과 저장 파일: ${OUTPUT_FILE}" | tee -a "${OUTPUT_FILE}"
 
 if [ "$PARALLEL" -gt 1 ]; then
     # 병렬 스트림 1개 초과 -> SUM 라인만 출력 (헤더 라인도 함께 표시)
-    stdbuf -oL iperf3 ${OPTS} | grep --line-buffered -E "SUM|ID\]"
+    stdbuf -oL iperf3 ${OPTS} | grep --line-buffered -E "SUM|ID\]" | tee -a "${OUTPUT_FILE}"
 else
     # 병렬 스트림 1개 -> 전체 로그 출력
-    iperf3 ${OPTS}
+    stdbuf -oL iperf3 ${OPTS} | tee -a "${OUTPUT_FILE}"
 fi
