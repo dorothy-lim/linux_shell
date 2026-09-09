@@ -7,13 +7,21 @@ DURATION=10                 # 테스트 시간(초)
 PARALLEL=10                 # 병렬 스트림 개수
 PROTOCOL="tcp"               # tcp 또는 udp
 BANDWIDTH=""                 # UDP일 때 대역폭 제한 (예: 100M), 비워두면 미적용
-#REVERSE=false               # true면 -R (서버->클라이언트 방향 테스트)
-REVERSE=true                 # true면 -R (서버->클라이언트 방향 테스트)
+REVERSE=false                # true면 -R (서버->클라이언트 방향 테스트), 스크립트 실행 시 -R 옵션으로 켤 수 있음
 INTERVAL=1                   # 결과 출력 간격(초)
 
 CONNECT_TIMEOUT=""           # --connect-timeout (밀리초 단위), 값 없으면 미적용 (예: 1000)
 FORMAT=""                    # -f, --format  (k,m,g,t / K,M,G,T), 값 없으면 미적용 (예: m)
 OMIT=""                      # -O, --omit N  (시작 N초 통계 제외), 값 없으면 미적용 (예: 3)
+
+# ===== 스크립트 실행 인자 처리 =====
+# 사용법: ./iperf.sh [-R]   (-R 을 주면 REVERSE=true)
+while getopts "R" opt; do
+    case "$opt" in
+        R) REVERSE=true ;;
+        *) echo "사용법: $0 [-R]" >&2; exit 1 ;;
+    esac
+done
 
 # ===== 옵션 조립 =====
 OPTS="-c ${SERVER_IP} -t ${DURATION} -P ${PARALLEL} -i ${INTERVAL}"
