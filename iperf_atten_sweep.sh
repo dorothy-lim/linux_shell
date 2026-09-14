@@ -226,6 +226,16 @@ measure_one_atten() {
         "$atten" "$LAST_DOWN" "$LAST_UP"
 }
 
+# ===== 경과 시간 처리 =====
+# 스윕이 시작된 시각(main 진입 시 설정). trap 안에서도 참조할 수 있도록 전역 변수로 둔다.
+SWEEP_START_TS=0
+
+# 초 단위 정수 -> "HH:MM:SS" 형태로 변환
+format_hms() {
+    local total_sec="$1"
+    printf "%02d:%02d:%02d" $((total_sec / 3600)) $(((total_sec % 3600) / 60)) $((total_sec % 60))
+}
+
 # ===== 지금까지의 결과를 정리해서 표로 출력 (정상 종료/중단 공통으로 사용) =====
 finalize_report() {
     echo
@@ -237,7 +247,12 @@ finalize_report() {
     if command -v column >/dev/null 2>&1; then
         column -s',' -t "${RESULT_FILE}"
     else
-        awk -F',' '{ printf "%-8s %-12s %-12s\n", $1, $2, $3 }' "${RESULT_FILE}"
+        awk -F',' '{ printf "%-8s %-12s %-12s %-10s\n", $1, $2, $3, $4 }' "${RESULT_FILE}"
+    fi
+
+    if [ "$SWEEP_START_TS" -ne 0 ]; then
+        local total_elapsed=$(($(date +%s) - SWEEP_START_TS))
+        echo "총 경과 시간: $(format_hms "$total_elapsed") (${total_elapsed}초)"
     fi
 }
 
@@ -251,26 +266,33 @@ main() {
         exit 1
     fi
 
+    SWEEP_START_TS=$(date +%s)
+
     local atten_list
     read -r -a atten_list <<< "$(build_atten_list "$ATTEN_START" "$ATTEN_END" "$ATTEN_STEP")"
     local total="${#atten_list[@]}"
 
-    echo "ATTEN,down,up" > "${RESULT_FILE}"
-    printf "%-8s %-12s %-12s\n" "ATTEN" "down" "up"
+    echo "ATTEN,down,up,elapsed" > "${RESULT_FILE}"
+    printf "%-8s %-12s %-12s %-10s\n" "ATTEN" "down" "up" "elapsed"
 
     local idx=0
     local fail_streak=0
     for atten in "${atten_list[@]}"; do
         idx=$((idx + 1))
-        echo "----- (${idx}/${total}) ATTEN=${atten} 측정 진행 중 -----"
+        local step_elapsed
+        step_elapsed="$(format_hms "$(($(date +%s) - SWEEP_START_TS))")"
+        echo "----- (${idx}/${total}) ATTEN=${atten} 측정 진행 중 (경과 ${step_elapsed}) -----"
 
         measure_one_atten "$atten"
 
+        local row_elapsed
+        row_elapsed="$(format_hms "$(($(date +%s) - SWEEP_START_TS))")"
+
         # 결과가 나오는 즉시 CSV 파일에 append (다른 터미널에서 `tail -f` 로도 실시간 확인 가능)
-        echo "${atten},${LAST_DOWN},${LAST_UP}" >> "${RESULT_FILE}"
+        echo "${atten},${LAST_DOWN},${LAST_UP},${row_elapsed}" >> "${RESULT_FILE}"
 
         # 지금까지의 결과를 표 형태로 실시간 갱신 출력
-        printf "%-8s %-12s %-12s\n" "$atten" "$LAST_DOWN" "$LAST_UP"
+        printf "%-8s %-12s %-12s %-10s\n" "$atten" "$LAST_DOWN" "$LAST_UP" "$row_elapsed"
 
         if [ "$LAST_FAILED" -eq 1 ]; then
             fail_streak=$((fail_streak + 1))
