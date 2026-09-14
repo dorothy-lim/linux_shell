@@ -13,12 +13,19 @@ PROTOCOL="tcp"              # tcp 또는 udp
 BANDWIDTH=""                # UDP일 때 대역폭 제한 (예: 100M), 비워두면 미적용
 INTERVAL=1                  # 결과 출력 간격(초)
 
-CONNECT_TIMEOUT=""          # --connect-timeout (밀리초 단위), 값 없으면 미적용 (예: 1000)
+CONNECT_TIMEOUT="3000"      # --connect-timeout (밀리초). 감쇠가 커져 연결 자체가 안 될 때
+                             # 무한 대기하지 않도록 기본값을 지정함 (예: 1000). 비우면 미적용
 FORMAT="m"                  # -f, --format  (k,m,g,t / K,M,G,T)
 OMIT="5"                    # -O, --omit N  (시작 N초 통계 제외)
 
 LOG_DIR="./atten_sweep_logs"   # -d 로 지정 가능, 개별 iperf3 로그 저장 디렉터리
 PREFIX=""                      # -o 로 지정 가능, 값 없으면 기본 파일명(prefix) 사용
+
+# ===== 연결 끊김/timeout 대응 변수 =====
+HARD_TIMEOUT_MARGIN=15       # iperf3 가 응답 없이 멈춰도 강제 종료시키기 위한 여유 시간(초)
+                              # 실제 iperf3 타임아웃 = DURATION + OMIT + HARD_TIMEOUT_MARGIN
+CONSEC_FAIL_LIMIT=2           # 연결 끊김/timeout 이 이 횟수만큼 연속 발생하면 스윕을 중단하고
+                              # 지금까지의 결과를 정리해서 마무리한다 (0 이면 끝까지 강행)
 
 # ===== ATTEN(감쇠기) 스윕 변수 =====
 ATTEN_START=0    # 스윕 시작 ATTEN 값(dB) - 결과에 항상 포함
@@ -102,12 +109,19 @@ set_atten() {
     python3 "$ATTEN_SCRIPT" -a "$atten"
 }
 
-# ===== 측정 함수 (iperf_updown.sh 의 run_iperf 와 동일) =====
+# ===== 측정 함수 (iperf_updown.sh 의 run_iperf 기반) =====
 # $1: 방향 이름 (downlink 또는 uplink), $2: 이번 ATTEN 값이 포함된 파일 prefix
+# iperf3 의 종료 코드는 전역 변수 IPERF_STATUS 로 전달한다.
+IPERF_STATUS=0
+
 run_iperf() {
     local direction="$1"
     local file_prefix="$2"
     local output_file="${LOG_DIR}/${file_prefix}_${direction}.log"
+
+    # 연결이 끊기거나 패킷을 못 받아 iperf3 가 멈춰도 스윕이 무한 대기하지 않도록
+    # 하드 타임아웃을 건다 (테스트 시간 + omit 구간 + 여유시간).
+    local hard_timeout=$((DURATION + OMIT + HARD_TIMEOUT_MARGIN))
 
     local opts="-c ${SERVER_IP} -t ${DURATION} -P ${PARALLEL} -i ${INTERVAL}"
 
@@ -138,13 +152,21 @@ run_iperf() {
         opts="${opts} -O ${OMIT}"
     fi
 
-    echo "===== [${direction}] 실행 명령어: iperf3 ${opts} =====" | tee "${output_file}"
+    echo "===== [${direction}] 실행 명령어: iperf3 ${opts} (timeout ${hard_timeout}s) =====" | tee "${output_file}"
     echo "[${direction}] 결과 저장 파일: ${output_file}" | tee -a "${output_file}"
 
     if [ "$PARALLEL" -gt 1 ]; then
-        stdbuf -oL iperf3 ${opts} | grep --line-buffered -E "SUM|ID\]" | tee -a "${output_file}"
+        stdbuf -oL timeout "${hard_timeout}s" iperf3 ${opts} | grep --line-buffered -E "SUM|ID\]" | tee -a "${output_file}"
+        IPERF_STATUS=${PIPESTATUS[0]}
     else
-        stdbuf -oL iperf3 ${opts} | tee -a "${output_file}"
+        stdbuf -oL timeout "${hard_timeout}s" iperf3 ${opts} | tee -a "${output_file}"
+        IPERF_STATUS=${PIPESTATUS[0]}
+    fi
+
+    if [ "$IPERF_STATUS" -eq 124 ]; then
+        echo "!! [${direction}] iperf3 가 ${hard_timeout}초 동안 응답이 없어 강제 종료됨 (timeout)" | tee -a "${output_file}"
+    elif [ "$IPERF_STATUS" -ne 0 ]; then
+        echo "!! [${direction}] iperf3 비정상 종료 (exit=${IPERF_STATUS}, 연결 끊김 가능성)" | tee -a "${output_file}"
     fi
 }
 
@@ -161,12 +183,15 @@ extract_mbps() {
 # 결과는 command substitution 으로 감싸지 않고 전역 변수(LAST_DOWN/LAST_UP)로
 # 넘긴다 -> run_iperf 의 실시간(iperf3 interval) 출력이 그대로 터미널에 표시되어
 # 진행 상황을 실시간으로 모니터링할 수 있다.
+# LAST_FAILED=1 이면 연결 끊김/timeout/무응답으로 이번 ATTEN 측정에 실패했다는 뜻이다.
 LAST_DOWN=""
 LAST_UP=""
+LAST_FAILED=0
 
 measure_one_atten() {
     local atten="$1"
     local file_prefix="${PREFIX}_atten${atten}"
+    local down_status up_status
 
     echo
     echo "########## [ATTEN = ${atten} dB] 측정 시작 ##########"
@@ -174,17 +199,50 @@ measure_one_atten() {
     sleep "${ATTEN_SETTLE_SEC}"
 
     run_iperf "downlink" "${file_prefix}"
+    down_status="$IPERF_STATUS"
+
     run_iperf "uplink" "${file_prefix}"
+    up_status="$IPERF_STATUS"
 
     LAST_DOWN="$(extract_mbps "${LOG_DIR}/${file_prefix}_downlink.log")"
     LAST_UP="$(extract_mbps "${LOG_DIR}/${file_prefix}_uplink.log")"
 
-    [ -z "$LAST_DOWN" ] && LAST_DOWN="0"
-    [ -z "$LAST_UP" ] && LAST_UP="0"
+    LAST_FAILED=0
+
+    # exit code 가 0이 아니거나(연결 끊김/timeout), receiver 라인 자체가 없으면
+    # (연결은 됐지만 패킷을 못 받은 경우) 실패로 간주하고 N/A 로 기록한다.
+    if [ "$down_status" -ne 0 ] || [ -z "$LAST_DOWN" ]; then
+        echo "!! [ATTEN = ${atten} dB] downlink 측정 실패 (연결 끊김/timeout)" >&2
+        LAST_DOWN="N/A"
+        LAST_FAILED=1
+    fi
+    if [ "$up_status" -ne 0 ] || [ -z "$LAST_UP" ]; then
+        echo "!! [ATTEN = ${atten} dB] uplink 측정 실패 (연결 끊김/timeout)" >&2
+        LAST_UP="N/A"
+        LAST_FAILED=1
+    fi
 
     printf ">>> [ATTEN = %s dB] down = %s Mbits/sec, up = %s Mbits/sec\n" \
         "$atten" "$LAST_DOWN" "$LAST_UP"
 }
+
+# ===== 지금까지의 결과를 정리해서 표로 출력 (정상 종료/중단 공통으로 사용) =====
+finalize_report() {
+    echo
+    echo "===== ATTEN 스윕 결과 정리 (${RESULT_FILE}) ====="
+    if [ ! -f "${RESULT_FILE}" ]; then
+        echo "(저장된 결과가 없습니다)"
+        return
+    fi
+    if command -v column >/dev/null 2>&1; then
+        column -s',' -t "${RESULT_FILE}"
+    else
+        awk -F',' '{ printf "%-8s %-12s %-12s\n", $1, $2, $3 }' "${RESULT_FILE}"
+    fi
+}
+
+# 사용자가 Ctrl+C 등으로 중단해도 지금까지의 결과를 정리하고 마무리한다.
+trap 'echo; echo "!! 사용자 중단 감지 - 지금까지 결과를 정리합니다."; finalize_report; exit 130' INT TERM
 
 # ===== 실행: ATTEN 스윕 =====
 main() {
@@ -201,6 +259,7 @@ main() {
     printf "%-8s %-12s %-12s\n" "ATTEN" "down" "up"
 
     local idx=0
+    local fail_streak=0
     for atten in "${atten_list[@]}"; do
         idx=$((idx + 1))
         echo "----- (${idx}/${total}) ATTEN=${atten} 측정 진행 중 -----"
@@ -212,15 +271,23 @@ main() {
 
         # 지금까지의 결과를 표 형태로 실시간 갱신 출력
         printf "%-8s %-12s %-12s\n" "$atten" "$LAST_DOWN" "$LAST_UP"
+
+        if [ "$LAST_FAILED" -eq 1 ]; then
+            fail_streak=$((fail_streak + 1))
+        else
+            fail_streak=0
+        fi
+
+        # 연결 끊김/timeout 이 연속으로 발생하면(신호가 이미 끊긴 상태) 더 진행해도
+        # 의미가 없으므로 스윕을 중단하고 지금까지의 결과를 정리해서 마무리한다.
+        if [ "$CONSEC_FAIL_LIMIT" -gt 0 ] && [ "$fail_streak" -ge "$CONSEC_FAIL_LIMIT" ]; then
+            echo
+            echo "!! ATTEN=${atten} 까지 연결 끊김/timeout 이 ${fail_streak}회 연속 발생하여 스윕을 중단합니다."
+            break
+        fi
     done
 
-    echo
-    echo "===== ATTEN 스윕 최종 결과 (${RESULT_FILE}) ====="
-    if command -v column >/dev/null 2>&1; then
-        column -s',' -t "${RESULT_FILE}"
-    else
-        awk -F',' '{ printf "%-8s %-12s %-12s\n", $1, $2, $3 }' "${RESULT_FILE}"
-    fi
+    finalize_report
 }
 
 main
