@@ -82,6 +82,23 @@ run_iperf() {
     fi
 }
 
+# ===== 요약 함수 =====
+# 각 방향 로그에서 receiver 기준 라인만 추출하여 요약 출력/저장
+print_summary() {
+    local summary_file="${LOG_DIR}/${PREFIX}_summary.log"
+
+    {
+        echo "===== 측정 요약 (receiver 기준) ====="
+        for direction in downlink uplink; do
+            local output_file="${LOG_DIR}/${PREFIX}_${direction}.log"
+            echo "--- ${direction} ---"
+            grep -i "receiver" "${output_file}"
+        done
+    } | tee "${summary_file}"
+}
+
 # ===== 실행: downlink -> uplink 순서로 한 번에 측정 =====
 run_iperf "downlink"
 run_iperf "uplink"
+
+print_summary
