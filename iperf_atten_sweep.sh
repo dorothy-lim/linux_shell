@@ -158,25 +158,32 @@ extract_mbps() {
 }
 
 # ===== ATTEN 값 하나에 대해 감쇠기 설정 + downlink/uplink 측정 수행 =====
+# 결과는 command substitution 으로 감싸지 않고 전역 변수(LAST_DOWN/LAST_UP)로
+# 넘긴다 -> run_iperf 의 실시간(iperf3 interval) 출력이 그대로 터미널에 표시되어
+# 진행 상황을 실시간으로 모니터링할 수 있다.
+LAST_DOWN=""
+LAST_UP=""
+
 measure_one_atten() {
     local atten="$1"
     local file_prefix="${PREFIX}_atten${atten}"
 
-    echo "===== ATTEN = ${atten} dB 설정 ====="
+    echo
+    echo "########## [ATTEN = ${atten} dB] 측정 시작 ##########"
     set_atten "$atten"
     sleep "${ATTEN_SETTLE_SEC}"
 
     run_iperf "downlink" "${file_prefix}"
     run_iperf "uplink" "${file_prefix}"
 
-    local down up
-    down="$(extract_mbps "${LOG_DIR}/${file_prefix}_downlink.log")"
-    up="$(extract_mbps "${LOG_DIR}/${file_prefix}_uplink.log")"
+    LAST_DOWN="$(extract_mbps "${LOG_DIR}/${file_prefix}_downlink.log")"
+    LAST_UP="$(extract_mbps "${LOG_DIR}/${file_prefix}_uplink.log")"
 
-    [ -z "$down" ] && down="0"
-    [ -z "$up" ] && up="0"
+    [ -z "$LAST_DOWN" ] && LAST_DOWN="0"
+    [ -z "$LAST_UP" ] && LAST_UP="0"
 
-    echo "${atten},${down},${up}"
+    printf ">>> [ATTEN = %s dB] down = %s Mbits/sec, up = %s Mbits/sec\n" \
+        "$atten" "$LAST_DOWN" "$LAST_UP"
 }
 
 # ===== 실행: ATTEN 스윕 =====
@@ -188,18 +195,32 @@ main() {
 
     local atten_list
     read -r -a atten_list <<< "$(build_atten_list "$ATTEN_START" "$ATTEN_END" "$ATTEN_STEP")"
+    local total="${#atten_list[@]}"
 
     echo "ATTEN,down,up" > "${RESULT_FILE}"
+    printf "%-8s %-12s %-12s\n" "ATTEN" "down" "up"
 
+    local idx=0
     for atten in "${atten_list[@]}"; do
-        local row
-        row="$(measure_one_atten "$atten")"
-        echo "$row" >> "${RESULT_FILE}"
+        idx=$((idx + 1))
+        echo "----- (${idx}/${total}) ATTEN=${atten} 측정 진행 중 -----"
+
+        measure_one_atten "$atten"
+
+        # 결과가 나오는 즉시 CSV 파일에 append (다른 터미널에서 `tail -f` 로도 실시간 확인 가능)
+        echo "${atten},${LAST_DOWN},${LAST_UP}" >> "${RESULT_FILE}"
+
+        # 지금까지의 결과를 표 형태로 실시간 갱신 출력
+        printf "%-8s %-12s %-12s\n" "$atten" "$LAST_DOWN" "$LAST_UP"
     done
 
     echo
-    echo "===== ATTEN 스윕 결과 (${RESULT_FILE}) ====="
-    column -s',' -t "${RESULT_FILE}"
+    echo "===== ATTEN 스윕 최종 결과 (${RESULT_FILE}) ====="
+    if command -v column >/dev/null 2>&1; then
+        column -s',' -t "${RESULT_FILE}"
+    else
+        awk -F',' '{ printf "%-8s %-12s %-12s\n", $1, $2, $3 }' "${RESULT_FILE}"
+    fi
 }
 
 main
