@@ -5,7 +5,7 @@
 SERVER_IP="192.168.1.145"   # 서버 IP 주소
 PORT=""                     # 값 없으면 -p 옵션 미적용 (기본 포트 5201 사용)
 DURATION=10                 # 테스트 시간(초)
-PARALLEL=10                 # 병렬 스트림 개수
+PARALLEL=10                 # 병렬 스트림 개수, -P 로 지정 가능
 PROTOCOL="tcp"               # tcp 또는 udp
 BANDWIDTH=""                 # UDP일 때 대역폭 제한 (예: 100M), 비워두면 미적용
 INTERVAL=1                   # 결과 출력 간격(초)
@@ -18,12 +18,13 @@ LOG_DIR="."                  # -d 로 지정 가능, 로그 저장 디렉터리
 PREFIX=""                    # -o 로 지정 가능, 값 없으면 기본 파일명(prefix) 사용
 
 # ===== 스크립트 실행 인자 처리 =====
-# 사용법: ./iperf_updown.sh [-d 로그디렉터리] [-o 파일명prefix]
-while getopts "d:o:" opt; do
+# 사용법: ./iperf_updown.sh [-d 로그디렉터리] [-o 파일명prefix] [-P 병렬스트림수]
+while getopts "d:o:P:" opt; do
     case "$opt" in
         d) LOG_DIR="$OPTARG" ;;
         o) PREFIX="$OPTARG" ;;
-        *) echo "사용법: $0 [-d 로그디렉터리] [-o 파일명prefix]" >&2; exit 1 ;;
+        P) PARALLEL="$OPTARG" ;;
+        *) echo "사용법: $0 [-d 로그디렉터리] [-o 파일명prefix] [-P 병렬스트림수]" >&2; exit 1 ;;
     esac
 done
 
