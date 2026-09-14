@@ -11,7 +11,7 @@ import re
 import socket
 import sys
 
-HOST = "192.168.100.250"
+HOST = "192.168.1.250"
 PORT = 3001
 PROMPT = "JFW>>"
 
